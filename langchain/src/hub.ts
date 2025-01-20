@@ -1,6 +1,6 @@
-import { Client, ClientConfiguration, HubPushOptions } from "langchainhub";
+import { Client } from "langsmith";
+import { Runnable } from "@langchain/core/runnables";
 import { load } from "./load/index.js";
-import { Runnable } from "./schema/runnable/index.js";
 
 /**
  * Push a prompt to the hub.
@@ -13,10 +13,30 @@ import { Runnable } from "./schema/runnable/index.js";
 export async function push(
   repoFullName: string,
   runnable: Runnable,
-  options?: HubPushOptions & ClientConfiguration
+  options?: {
+    apiKey?: string;
+    apiUrl?: string;
+    parentCommitHash?: string;
+    /** @deprecated Use isPublic instead. */
+    newRepoIsPublic?: boolean;
+    isPublic?: boolean;
+    /** @deprecated Use description instead. */
+    newRepoDescription?: string;
+    description?: string;
+    readme?: string;
+    tags?: string[];
+  }
 ) {
   const client = new Client(options);
-  return client.push(repoFullName, JSON.stringify(runnable), options);
+  const payloadOptions = {
+    object: runnable,
+    parentCommitHash: options?.parentCommitHash,
+    isPublic: options?.isPublic ?? options?.newRepoIsPublic,
+    description: options?.description ?? options?.newRepoDescription,
+    readme: options?.readme,
+    tags: options?.tags,
+  };
+  return client.pushPrompt(repoFullName, payloadOptions);
 }
 
 /**
@@ -27,9 +47,26 @@ export async function push(
  */
 export async function pull<T extends Runnable>(
   ownerRepoCommit: string,
-  options?: ClientConfiguration
+  options?: { apiKey?: string; apiUrl?: string; includeModel?: boolean }
 ) {
   const client = new Client(options);
-  const result = await client.pull(ownerRepoCommit);
-  return load<T>(result);
+
+  const promptObject = await client.pullPromptCommit(ownerRepoCommit, {
+    includeModel: options?.includeModel,
+  });
+
+  if (promptObject.manifest.kwargs?.metadata === undefined) {
+    promptObject.manifest.kwargs = {
+      ...promptObject.manifest.kwargs,
+      metadata: {},
+    };
+  }
+
+  promptObject.manifest.kwargs.metadata = {
+    ...promptObject.manifest.kwargs.metadata,
+    lc_hub_owner: promptObject.owner,
+    lc_hub_repo: promptObject.repo,
+    lc_hub_commit_hash: promptObject.commit_hash,
+  };
+  return load<T>(JSON.stringify(promptObject.manifest));
 }
